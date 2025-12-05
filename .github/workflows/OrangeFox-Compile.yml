@@ -15,24 +15,25 @@ on:
         default: '12.1'
         type: choice
         options:
+        - 14.1
         - 12.1
         - 11.0
       DEVICE_TREE:
         description: 'OrangeFox Device Tree'
         required: true
-        default: 'https://github.com/cd-Crypton/custom_recovery_tree_realme_nashc'
+        default: 'https://github.com/xccxxcys/OrangeFox-Recovery-Builder-2024'
       DEVICE_TREE_BRANCH:
         description: 'OrangeFox Device Tree Branch'
         required: true
-        default: 'android-12.1'
+        default: 'OrangeFox'
       DEVICE_PATH:
         description: 'Specify your Device Path'
         required: true
-        default: 'device/realme/nashc'
+        default: 'device/oplus/sm86xx'
       DEVICE_NAME:
         description: 'Specify your Device Codename'
         required: true
-        default: 'nashc'
+        default: 'sm86xx'
       BUILD_TARGET:
         description: 'Specify your Build Target'
         required: true
@@ -65,7 +66,9 @@ jobs:
       
     - name: Build Environment
       run: |
+        sudo apt update && sudo apt upgrade -y
         sudo apt install aria2 -y
+        sudo apt install repo -y
         git clone https://gitlab.com/OrangeFox/misc/scripts.git -b master
         cd scripts
         sudo bash setup/android_build_env.sh
@@ -82,7 +85,7 @@ jobs:
         cd ${GITHUB_WORKSPACE}/OrangeFox
         git config --global user.name "${{ github.actor }}"
         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        git clone https://gitlab.com/OrangeFox/sync.git -b master
+        repo init --depth=1 -q -u https://gitlab.com/OrangeFox/Manifest.git -b
         cd sync
         ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
 
