@@ -1,0 +1,310 @@
+name: 🦊 OFRP Builder (auto)
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: '🌿 OrangeFox Manifest Branch'
+        required: true
+        default: '14.1'
+        type: choice
+        options:
+          - 12.1
+          - 14.1
+      DEVICE_TREE:
+        description: '📱 Device Tree URL'
+        required: true
+        default: 'https://github.com/xccxxcys/OrangeFox-Recovery-Builder-2024'
+      DEVICE_TREE_BRANCH:
+        description: '🌱 Device Tree Branch'
+        required: true
+        default: 'OrangeFox'
+      DEVICE_PATH:
+        description: '📂 Specify your Device Path'
+        required: true
+        default: 'device/oplus/sm86xx'
+      DEVICE_NAME:
+        description: '🖥️ Specify your Device Codename'
+        required: true
+        default: 'sm86xx'
+      TARGET_API_LEVEL:
+        description: '📶 Specify Target API Level (14.1→34, 12.1→32)'
+        required: true
+        default: '34'
+      LUNCH_TARGET:
+        description: "🛠️ lunch twrp_ (default same as device name)"
+        required: false
+        default: 'sm86xx'
+      BUILD_PARTITION:
+        description: '🎯 Specify your Build Target'
+        required: true
+        default: 'recovery'
+        type: choice
+        options:
+          - boot
+          - recovery
+          - vendorboot
+      MAGISK_VERSION:
+        description: '🔧 Specify your Magisk Version'
+        required: true
+        default: 'MagiskAlpha'
+        type: choice
+        options:
+          - Magisk
+          - MagiskAlpha
+          - MagiskDelta
+      RECOVERY_INSTALLER:
+        description: '💾 Include recovery magisk installer.zip'
+        type: boolean
+        required: true
+        default: true    
+      RECOVERY_TAR:
+        description: '💾 Release Recovery.tar For Samsung devices'
+        type: boolean
+        required: false
+        default: false    
+      USE_PATCHES:
+        description: '🧩 Apply wifi 14.1 patches'
+        type: boolean
+        required: true
+        default: false
+      USE_YMDZQ_PATCHES:
+        description: '🧩 Apply ymdzq ofrp 12.1 patches'
+        type: boolean
+        required: true
+        default: false
+
+jobs:
+  build:
+    name: 🚀 Build OrangeFox by ${{ github.actor }}
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: write
+    steps:
+      - name: ℹ️ Show build info
+        run: |
+          if [ -n "${{ inputs.LUNCH_TARGET }}" ]; then
+            echo "LUNCH_TARGET=${{ inputs.LUNCH_TARGET }}" >> "$GITHUB_ENV"
+          else
+            echo "LUNCH_TARGET=${{ inputs.DEVICE_NAME }}" >> "$GITHUB_ENV"
+          fi
+          {
+            echo 'BUILD_INFO<<EOF'
+            echo
+            echo "📱 Device tree url: ${{ inputs.DEVICE_TREE }}"
+            echo "🌿 Device tree branch: ${{ inputs.DEVICE_TREE_BRANCH }}"
+            echo "📂 Device path: ${{ inputs.DEVICE_PATH }}"
+            echo "🖥️ Device name: ${{ inputs.DEVICE_NAME }}"
+            echo "📶 Target API Level: ${{ inputs.TARGET_API_LEVEL }}"
+            echo "🛠️ Lunch target: ${{ env.LUNCH_TARGET }}"
+            echo "🎯 Build target: ${{ inputs.BUILD_PARTITION }}.img"
+            echo "📅 Build date: $(date)"
+            echo "🧩 Apply wifi patches: ${{ inputs.USE_PATCHES }}"
+            echo "🧩 Apply ymdzq patches: ${{ inputs.USE_YMDZQ_PATCHES }}"
+            echo
+            echo EOF
+          } >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date +%F)" >> "$GITHUB_ENV"
+
+      - name: 🧹 Clean-up
+        uses: rokibhasansagar/slimhub_actions@main
+        
+      - name: 💾 Max Space
+        uses: easimon/maximize-build-space@master
+        
+      - name: ⚡ Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          create-symlink: true
+
+      - name: 🚀 Setup zram
+        run: |
+          sudo apt install linux-modules-extra-$(uname -r) zram-tools -y
+          sudo modprobe zram
+          sudo sed -i 's/^#PERCENT=50/PERCENT=90/' /etc/default/zramswap
+          sudo sed -i 's/^#PRIORITY=100/PRIORITY=1000/' /etc/default/zramswap
+          sudo systemctl restart zramswap
+          zramctl
+
+      - name: 🌐 Build Environment
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt update && sudo apt install software-properties-common lsb-release -y
+          git config --global user.name ${{ github.actor }}
+          git config --global user.email ${{ github.actor }}@users.noreply.github.com
+          sudo curl -L -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
+          sudo chmod a+rx /usr/local/bin/repo
+          
+      - name: 📥 Pull TWRP Source & Run OrangeFox Sync
+        run: |
+          WORKINGDIR=$(pwd)
+          if [ "${{ inputs.MANIFEST_BRANCH }}" = "14.1" ]; then
+            TWRP_REPO="https://github.com/nebrassy/platform_manifest_twrp_aosp.git"
+            TWRP_BRANCH="twrp-14"
+            repo init -u $TWRP_REPO -b $TWRP_BRANCH --depth=1
+            repo sync
+            git clone https://gitlab.com/OrangeFox/sync.git -b master
+            chmod +x sync/orangefox_sync.sh
+            cd sync
+            ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path $WORKINGDIR
+            cd $WORKINGDIR
+          else
+            git clone https://gitlab.com/OrangeFox/sync.git -b master
+            chmod +x sync/orangefox_sync.sh
+            cd sync
+            ./orangefox_sync.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path $WORKINGDIR
+            cd $WORKINGDIR
+          fi
+          
+      - name: 🧩 Apply ymdzq 12.1 patches
+        if: ${{ inputs.USE_YMDZQ_PATCHES == true && inputs.MANIFEST_BRANCH == '12.1' }}
+        run: |
+          WORKINGDIR=$(pwd)
+          sed -i 's/<project name="android_hardware_qcom_bootctrl" path="hardware\/qcom-caf\/bootctrl" remote="LineageOS" revision="lineage-19.1-caf" \/>/<project name="android_hardware_qcom_bootctrl" path="hardware\/qcom-caf\/bootctrl" remote="LineageOS" revision="lineage-21.0-caf" \/>/g' $WORKINGDIR/.repo/manifests/twrp-default.xml
+          sed -i '/<project path="bootable\/recovery" name="android_bootable_recovery" remote="TeamWin" revision="android-12.1"\/>/d' $WORKINGDIR/.repo/manifests/twrp-default.xml
+          mv $WORKINGDIR/bootable/recovery $WORKINGDIR/bootable/recovery-ofrp
+          repo sync
+          mv $WORKINGDIR/bootable/recovery-ofrp $WORKINGDIR/bootable/recovery
+          cd $WORKINGDIR/bootable/recovery
+          git fetch https://github.com/ymdzq/OrangeFox_Recovery fox_12.1 && git cherry-pick 36289fac..05b3e1b9 || echo "⚠️ 12.1分支ymdzq补丁应用失败/无新补丁，继续构建"
+          cd $WORKINGDIR
+
+      - name: 🧩 Apply wifi 14.1 patches
+        if: ${{ inputs.USE_PATCHES == true && inputs.MANIFEST_BRANCH == '14.1' }}
+        run: |
+          WORKINGDIR=$(pwd)
+          cd $WORKINGDIR/bootable/recovery
+          git apply $WORKINGDIR/${{ inputs.DEVICE_PATH }}/patches/*.patch || echo "⚠️ 14.1分支wifi补丁应用失败，继续构建"
+          cd $WORKINGDIR
+          git clone https://github.com/adontoo/android_external_libmicrohttpd -b ofox-14.1 external/libmicrohttpd
+          rm -rf bionic
+          git clone https://github.com/adontoo/OrangeFox-android_platform_bionic bionic
+
+      - name: 📱 Setup device
+        run: |
+          git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ${{ inputs.DEVICE_PATH }}
+          DEVICE_TREE_URL="${{ inputs.DEVICE_TREE }}"
+          [[ "${DEVICE_TREE_URL}" == *.git ]] && DEVICE_TREE_URL="${DEVICE_TREE_URL%.git}"
+          echo "DEVICE_TREE_URL=${DEVICE_TREE_URL}" >> $GITHUB_ENV
+
+      - name: 🔧 Auto set API Level in device.mk
+        run: |
+          WORKINGDIR=$(pwd)
+          TARGET_API_LEVEL="${{ inputs.TARGET_API_LEVEL }}"
+          DEVICE_MK_PATH="$WORKINGDIR/${{ inputs.DEVICE_PATH }}/device.mk"
+          if ! grep -q '^BOARD_SHIPPING_API_LEVEL' "$DEVICE_MK_PATH"; then
+            echo "BOARD_SHIPPING_API_LEVEL := $TARGET_API_LEVEL" >> "$DEVICE_MK_PATH" && echo "✅ Added BOARD_SHIPPING_API_LEVEL=$TARGET_API_LEVEL in $DEVICE_MK_PATH"
+          else
+            sed -i "s/^BOARD_SHIPPING_API_LEVEL\s*:=.*/BOARD_SHIPPING_API_LEVEL := $TARGET_API_LEVEL/" "$DEVICE_MK_PATH" && echo "✅ Updated BOARD_SHIPPING_API_LEVEL to $TARGET_API_LEVEL in $DEVICE_MK_PATH"
+          fi
+          if ! grep -q '^PRODUCT_SHIPPING_API_LEVEL' "$DEVICE_MK_PATH"; then
+            echo "PRODUCT_SHIPPING_API_LEVEL := $TARGET_API_LEVEL" >> "$DEVICE_MK_PATH" && echo "✅ Added PRODUCT_SHIPPING_API_LEVEL=$TARGET_API_LEVEL in $DEVICE_MK_PATH"
+          else
+            sed -i "s/^PRODUCT_SHIPPING_API_LEVEL\s*:=.*/PRODUCT_SHIPPING_API_LEVEL := $TARGET_API_LEVEL/" "$DEVICE_MK_PATH" && echo "✅ Updated PRODUCT_SHIPPING_API_LEVEL to $TARGET_API_LEVEL in $DEVICE_MK_PATH"
+          fi
+
+      - name: 🔧 Clone OrangeFox Built-in Magisk
+        run: |
+          WORKINGDIR=$(pwd)
+          git clone https://github.com/xccxxcys/twrp_prebuilt ~/twrp_prebuilt
+          if ! grep -q 'FOX_USE_SPECIFIC_MAGISK_ZIP' $WORKINGDIR/vendorsetup.sh; then
+            echo 'export FOX_USE_SPECIFIC_MAGISK_ZIP=~/twrp_prebuilt/Magisk/${{ inputs.MAGISK_VERSION }}.apk' >> $WORKINGDIR/vendorsetup.sh && echo "✅ Added FOX_USE_SPECIFIC_MAGISK_ZIP in vendorsetup.sh"
+          else
+            sed -i 's/.*export FOX_USE_SPECIFIC_MAGISK_ZIP.*/export FOX_USE_SPECIFIC_MAGISK_ZIP=\~\/twrp_prebuilt\/Magisk\/${{ inputs.MAGISK_VERSION }}.apk/' $WORKINGDIR/vendorsetup.sh && echo "✅ Updated FOX_USE_SPECIFIC_MAGISK_ZIP in vendorsetup.sh"
+          fi
+
+      - name: 🔧 Update OrangeFox Built-in magiskboot
+        run: |
+          WORKINGDIR=$(pwd)
+          sudo mkdir -p $WORKINGDIR/vendor/recovery/prebuilt/arm $WORKINGDIR/vendor/recovery/prebuilt/arm64 $WORKINGDIR/vendor/recovery/tools
+          curl -L --retry 3 $(echo $(curl -s "https://api.github.com/repos/topjohnwu/Magisk/releases?per_page=1&include_prereleases=true") | jq -r '.[0].assets[] | select(.name | test("Magisk-.*\\.apk")) | .browser_download_url') -o Magisk.apk
+          unzip -q Magisk.apk "lib/*/libmagiskboot.so" -d ~/magiskboot
+          cp -f ~/magiskboot/lib/armeabi-v7a/libmagiskboot.so $WORKINGDIR/vendor/recovery/prebuilt/arm/magiskboot_updated
+          cp -f ~/magiskboot/lib/arm64-v8a/libmagiskboot.so $WORKINGDIR/vendor/recovery/prebuilt/arm64/magiskboot_updated
+          cp -f ~/magiskboot/lib/x86_64/libmagiskboot.so $WORKINGDIR/vendor/recovery/tools/magiskboot
+          echo "✅ Updated magiskboot successfully"
+
+      - name: 📝 Generate build info
+        run: |
+          echo -e "$BUILD_INFO" >> INFO.txt
+          echo "📜 Change log:" >> INFO.txt
+          set +e
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+          if [ $? -eq 0 ]; then
+            git log "$LAST_TAG"..HEAD --pretty=format:"- %h-%an: %s" >> INFO.txt
+          else
+            git log --pretty=format:"- %h-%an: %s" >> INFO.txt
+          fi
+          cat INFO.txt
+        working-directory: ${{ inputs.DEVICE_PATH }}
+
+      - name: 🛠️ Build OFRP
+        run: |
+          set +e  
+          sed -i 's/return sandboxConfig\.working/return false/g' build/soong/ui/build/sandbox_linux.go   
+          export CCACHE_DIR=.ccache
+          export CCACHE_EXEC=$(command -v ccache)
+          export CCACHE_MAXSIZE=5G
+          export USE_CCACHE=1
+          export ALLOW_MISSING_DEPENDENCIES=true
+          ccache -s
+          source build/envsetup.sh
+          set -e
+          # 核心修改：根据 MANIFEST_BRANCH 动态选择 lunch 格式
+          if [ "${{ inputs.MANIFEST_BRANCH }}" = "14.1" ]; then
+            # 14.1分支：符合 <product>-<release>-<variant> 规范（ap2a为Android 14 release代号）
+            lunch twrp_${{ env.LUNCH_TARGET }}-ap2a-eng
+          elif [ "${{ inputs.MANIFEST_BRANCH }}" = "12.1" ]; then
+            # 12.1分支：保持原有格式
+            lunch twrp_${{ env.LUNCH_TARGET }}-eng
+          else
+            echo "❌ Unsupported MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}"
+            exit 1
+          fi
+          make clean
+          (while true; do echo "🛠️ [$(date +%T)] Building OFRP... | Free Mem: $(free -h | awk '/Mem:/ {print $4}')"; sleep 10; done) &
+          TIP_PID=$!
+          mka adbd ${{ inputs.BUILD_PARTITION }}image -j$(nproc --all)
+          kill $TIP_PID && exit 0
+
+      - name: 💾 Include Recovery Installer
+        if: ${{ inputs.RECOVERY_INSTALLER == true }}
+        run: |
+          WORKINGDIR=$(pwd)
+          cd $WORKINGDIR/out/target/product/${{ inputs.DEVICE_NAME }}/
+          wget https://github.com/kinguser981/recovery-installer/releases/download/zip/recovery-installer.zip
+          zip -ur recovery-installer.zip ${{ inputs.BUILD_PARTITION }}.img
+        continue-on-error: true
+        
+      - name: 💾 Recovery to tar for Samsung devices
+        if: ${{ inputs.RECOVERY_TAR == true }}
+        run: |
+          WORKINGDIR=$(pwd)
+          cd $WORKINGDIR/out/target/product/${{ inputs.DEVICE_NAME }}/
+          tar -cvf ${{ inputs.BUILD_PARTITION }}.tar ${{ inputs.BUILD_PARTITION }}.img
+        continue-on-error: true
+        
+      - name: 📤 Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/target/product/${{ inputs.DEVICE_NAME }}/OrangeFox*.img
+            out/target/product/${{ inputs.DEVICE_NAME }}/recovery-installer.zip
+            out/target/product/${{ inputs.DEVICE_NAME }}/*.tar
+          name: 🦊 OrangeFox-R11.3-${{ inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}-${{ github.run_id }}
+          tag_name: ${{ env.BUILD_DATE }}-${{ github.run_id }}
+          body: |
+            ### OrangeFox Recovery Build - Unofficial
+            📌 Build: fox_${{ inputs.MANIFEST_BRANCH }}
+            📱 Device: [Device Tree/Branch](${{ env.DEVICE_TREE_URL }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
+            ✅ Trigger Commit: [${{ github.sha }}](${{ env.DEVICE_TREE_URL }}/commit/${{ github.sha }})
+            🔧 Magisk Version: ${{ inputs.MAGISK_VERSION }}
+            📶 Target API Level: ${{ inputs.TARGET_API_LEVEL }}
+            🧩 Apply wifi 14.1 patches: ${{ inputs.USE_PATCHES }}
+            🧩 Apply ymdzq ofrp 12.1 patches: ${{ inputs.USE_YMDZQ_PATCHES }}
+            ### ⚠️ Warning
+            - For ${{ inputs.DEVICE_NAME }} only!
+          body_path: ${{ inputs.DEVICE_PATH }}/INFO.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

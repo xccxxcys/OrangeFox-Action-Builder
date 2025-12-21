@@ -1,0 +1,172 @@
+<?xml version="1.0"?>
+<recovery>
+	<pages>
+		<page name="wlan">
+            
+			<template name="base"/>
+
+			<text style="text_ab_title">
+				<placement x="%col1_x_indent%" y="%ab_bc_y%"/>
+				<text>{@wlan_menu}</text>
+			</text>
+
+			<listbox style="btn_list">
+				<placement x="0" y="%ab_h%" w="%screen_w%" h="%files_np_w%"/>
+                <listitem name="{@wlan_scan}">
+					<icon res="bs_btn_wut"/>
+					<action function="page">wlan_wait</action>
+					<action function="terminalcommand">wlan_scan</action>
+					<action function="page">wlan_list</action>
+				</listitem>
+                <listitem name="{@wlan_status}">
+					<icon res="info"/>
+					<action function="page">wlan</action>
+					<action function="overlay">console</action>
+					<action function="terminalcommand">wlan_info</action>
+				</listitem>
+                <listitem name="{@wlan_test}">
+					<icon res="bs_adv_term"/>
+					<action function="page">wlan</action>
+					<action function="overlay">console</action>
+					<action function="terminalcommand">
+					echo "Trying test net connection with ping bing.com ..."
+					echo "=============Ping bing.com==========="
+					echo " "
+					busybox ping -w 4 bing.com
+					echo " "
+					echo "====================================="
+					echo " "
+					echo " "
+					echo " "</action>
+				</listitem>
+            </listbox>
+
+			<template name="gestures"/>
+
+			<action>
+				<touch key="home"/>
+				<action function="page">main</action>
+			</action>
+
+			<action>
+				<touch key="back"/>
+				<action function="page">advanced</action>
+			</action>
+		</page>
+
+		<page name="wlan_list">
+            <template name="base"/>
+
+            <text style="text_ab_title">
+                <placement x="%col1_x_indent%" y="%ab_bc_y%"/>
+                <text>{@wlan_list}</text>
+            </text>
+
+			<action function="setvaluebyfile">wlanempty,/tmp/wlan/list.txt</action>
+
+			<action function="set">wlanlistdisplay=0</action>
+
+			<action>
+				<condition var1="fileexists" var2="/tmp/wlan/list.txt"/>
+				<action function="set">wlanlistdisplay=1</action>
+				<action function="set">of_file_to_read=/tmp/wlan/list.txt</action>
+			</action>
+
+			<text style="text_ab_title">
+				<condition var1="fileexists" op="!=" var2="/tmp/wlan/list.txt"/>
+				<placement x="%col1_x_indent%" y="%ab_h%"/>
+				<text>{@wlan_empty}</text>
+			</text>
+
+			<listbox style="btn_list">
+				<condition var1="fileexists" var2="/tmp/wlan/list.txt"/>
+				<placement x="0" y="%ab_h%" w="%screen_w%" h="%row_nav_y%"/>
+				<data name="of_file_to_read"/>
+			</listbox>
+
+            <template name="gestures"/>
+
+            <action>
+                <touch key="home"/>
+                <action function="set">wlanlistdisplay=</action>
+                <action function="set">of_file_to_read=</action>
+                <action function="page">main</action>
+            </action>
+
+            <action>
+                <touch key="back"/>
+				<action function="set">wlanlistdisplay=</action>
+                <action function="set">of_file_to_read=</action>
+                <action function="page">wlan</action>
+            </action>
+        </page>
+
+		<page name="wlan_connect">
+			<action>
+				<action function="set">wlan_password=</action>
+				<action function="setvaluebyfile">wlanencryption,/tmp/wlan/list/%wlanselectedid%</action>
+			</action>
+
+			<action>
+				<condition var1="wlanencryption" op="!=" var2="OPEN"/>
+		        <action function="page">wlan_password</action>
+			</action>
+
+			<action function="page">wlan</action>
+			<action function="overlay">console</action>
+			<action function="terminalcommand">wlan_connect "%wlanselectedid%"</action>
+		</page>
+
+		<page name="wlan_password">
+			<action function="page">wlan_password_pattern</action>
+			
+			<template name="body_ct"/>
+			<template name="keyboardtemplate"/>
+			<action function="set">of_show_pass=1</action>
+			<template name="wlan_password_page"/>
+		</page>
+
+		<page name="wlan_password_pattern">
+			<template name="body_ct"/>
+			<template name="navbar"/>
+
+			<image>
+				<image resource="actionbar_encr_ena"/>
+				<placement x="%center_x%" y="%centered_title_1%" placement="4"/>
+			</image>
+
+			<text style="text_ab_subtitle">
+				<placement x="%center_x%" y="%centered_title_2%" placement="4"/>
+				<text>{@decrypt}</text>
+			</text>
+
+			<patternpassword>
+				<placement x="%pattern_x%" y="%row4_1a_y%" w="%pattern_size%" h="%pattern_size%"/>
+				<data name="wlan_password"/>
+				<action function="page">wlan_password</action>
+			</patternpassword>
+			
+			<template name="gestures"/>
+
+			<action>
+				<touch key="home"/>
+				<action function="page">wlan_password</action>
+			</action>
+
+			<action>
+				<touch key="back"/>
+				<action function="page">wlan_password</action>
+			</action>
+		</page>
+
+		<page name="wlan_wait">
+			<template name="base"/>
+			<template name="dialog_body"/>
+
+			<text style="text_status">
+				<placement x="%center_x%" y="%center_y%" placement="5"/>
+				<text>{@wlan_scanning}</text>
+			</text>
+		</page>
+	</pages>
+</recovery>

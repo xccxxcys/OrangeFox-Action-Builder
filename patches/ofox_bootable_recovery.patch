@@ -1,0 +1,600 @@
+diff --git a/Android.mk b/Android.mk
+old mode 100755
+new mode 100644
+index ed2e2c19..e6a66889
+--- a/Android.mk
++++ b/Android.mk
+@@ -329,6 +329,12 @@ endif
+ ifeq ($(TW_NO_HAPTICS), true)
+     LOCAL_CFLAGS += -DTW_NO_HAPTICS
+ endif
++ifneq ($(TW_NO_NETWORK), true)
++    TWRP_REQUIRED_MODULES += \
++        microhttpd \
++        index.html \
++        microhttpd.rc
++endif
+ ifneq ($(TW_ADDITIONAL_APEX_FILES),)
+     LOCAL_CFLAGS += -DTW_ADDITIONAL_APEX_FILES=$(TW_ADDITIONAL_APEX_FILES)
+ endif
+diff --git a/gui/action.cpp b/gui/action.cpp
+index c40776fa..e2ff09a0 100755
+--- a/gui/action.cpp
++++ b/gui/action.cpp
+@@ -39,6 +39,7 @@
+ #include <android-base/properties.h>
+ 
+ #include <string>
++#include <fstream>
+ #include <sstream>
+ #include "../partitions.hpp"
+ #include "../twrp-functions.hpp"
+@@ -301,6 +302,7 @@ GUIAction::GUIAction(xml_node <> *node):GUIObject(node)
+ #endif
+       ADD_ACTION(mergesnapshots);
+       ADD_ACTION(disableAVB2);
++      ADD_ACTION(setvaluebyfile);
+ 
+       //[f/d] Threaded actions
+       ADD_ACTION(batch);
+@@ -3050,4 +3052,55 @@ int GUIAction::disableAVB2(string arg __unused) {
+ 	operation_end(op_status);
+ 	return 0;
+ }
+-//
++
++static std::string run_command_get_output(const std::string& cmd) {
++  FILE* fp = popen(cmd.c_str(), "r");
++  if (!fp)
++      return "";
++
++  std::string out;
++  char buf[512];
++
++  while (fgets(buf, sizeof(buf), fp) != nullptr) {
++      out += buf;
++  }
++
++  pclose(fp);
++
++  while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) {
++      out.pop_back();
++  }
++
++  return out;
++}
++
++static std::string read_file_to_string(const std::string& path) {
++  std::ifstream ifs(path.c_str(), std::ios::in);
++  if (!ifs.is_open()) {
++      return "";
++  }
++
++  std::stringstream ss;
++  ss << ifs.rdbuf();
++  std::string out = ss.str();
++
++  while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
++      out.pop_back();
++
++  return out;
++}
++
++int GUIAction::setvaluebyfile(std::string arg) {
++  size_t pos = arg.find(',');
++  std::string var  = arg.substr(0, pos);
++  std::string file = arg.substr(pos + 1);
++  std::string info = read_file_to_string(file);
++  if (!info.empty()) {
++    DataManager::SetValue(var, info);
++    LOGINFO("setvaluebyfile: %s = %s\n", var.c_str(), info.c_str());
++  } else {
++    LOGINFO("setvaluebyfile: Error: empty file %s\n", file.c_str());
++  }
++  //gui_print("%s", info.c_str());
++  return 0;
++}
+\ No newline at end of file
+diff --git a/gui/listbox.cpp b/gui/listbox.cpp
+index 0fe4b3bd..49603160 100644
+--- a/gui/listbox.cpp
++++ b/gui/listbox.cpp
+@@ -226,17 +226,21 @@ void GUIListBox::ReadFileToList(const char* fileName) {
+ 	mVisibleItems.clear();
+ 	SetVisibleListLocation(0);
+ 	string error = "Error";
++	std::string wlan_display;
++    DataManager::GetValue("wlanlistdisplay", wlan_display);
+ 	std::vector<wstring> lines;
+-
+-	lines.push_back(L"");
++	if(wlan_display != "1")
++		lines.push_back(L"");
+ 	
+ 	if (TWFunc::Get_File_Size(fileName) > 1572864) //1.5mb
+ 		error = gui_parse_text("{@file_read_error_size=File is bigger than 1.5MB!}");
+ 	else if (TWFunc::read_file(fileName, lines) == 0) {
+-		if ((lines[0] + lines[1]).find('\0') != std::string::npos) // i
++		//if ((lines[0] + lines[1]).find('\0') != std::string::npos) // i
++		if (lines.size() >= 2 && (lines[0] + lines[1]).find(L'\0') != std::wstring::npos)
+ 			error = gui_parse_text("{@file_read_error_bin=Can't read binary file!}");
+ 		else {
+-			lines.push_back(L"");
++			if(wlan_display != "1")
++				lines.push_back(L"");
+ 			unsigned int vector_size = lines.size();
+ 			for (unsigned int i = 0; i < vector_size; i++) {
+ 				wstring line = lines[i];
+@@ -418,7 +422,9 @@ void GUIListBox::RenderItem(size_t itemindex, int yPos, bool selected)
+ 
+ void GUIListBox::NotifySelect(size_t item_selected)
+ {
+-	if (mVariable == "of_file_to_read") return;
++	std::string wlan_display;
++    DataManager::GetValue("wlanlistdisplay", wlan_display);
++	if (mVariable == "of_file_to_read" && wlan_display != "1") return;
+ 	if (!isCheckList) {
+ 		// deselect all items, even invisible ones
+ 		for (size_t i = 0; i < mListItems.size(); i++) {
+@@ -433,6 +439,10 @@ void GUIListBox::NotifySelect(size_t item_selected)
+ 		DataManager::SetValue("tw_crypto_user_id", item.variableValue);
+ 		DataManager::SetValue("tw_crypto_pwtype", item.id);
+ 		DataManager::SetValue(mVariable, item.variableValue);
++	} else if (mVariable == "of_file_to_read" && wlan_display == "1") {
++		DataManager::SetValue("wlanselectedid", item.displayName);
++		gui_changePage("wlan_connect");
++		DataManager::SetValue("wlanlistdisplay", "0");
+ 	} else if (isCheckList) {
+ 		int selected = 1 - item.selected;
+ 		item.selected = selected;
+diff --git a/gui/objects.hpp b/gui/objects.hpp
+index fc49e26f..e4ff83cf 100644
+--- a/gui/objects.hpp
++++ b/gui/objects.hpp
+@@ -402,6 +402,7 @@ protected:
+ #endif
+ 
+ 	int disableAVB2(std::string arg);
++	int setvaluebyfile(std::string arg);
+ 	// (originally) threaded actions
+ 	int fileexists(std::string arg);
+ 	int flash(std::string arg);
+diff --git a/gui/theme/common/languages/en.xml b/gui/theme/common/languages/en.xml
+index bc7e0ae7..83119d60 100644
+--- a/gui/theme/common/languages/en.xml
++++ b/gui/theme/common/languages/en.xml
+@@ -1254,5 +1254,18 @@
+ 		<string name="enable_hw_control_2">the interface using the hardware</string>
+ 		<string name="enable_hw_control_3">volume and power buttons.</string>
+ 		<string name="enable_hw_control_4">Gestures will be disabled. Proceed?</string>
++
++		<!-- WLAN -->
++		<string name="wlan_menu">WLAN</string>
++		<string name="wlan_scan">Scan Network</string>
++		<string name="wlan_scanning">Network Scanning...</string>
++		<string name="wlan_connect">Connect Network</string>
++		<string name="wlan_status">Get Network Info</string>
++		<string name="wlan_test">Test Network Connection</string>
++		<string name="wlan_list">WLAN List</string>
++		<string name="wlan_select">Select to connect</string>
++		<string name="wlan_password">Enter password for WLAN</string>
++		<string name="wlan_encryption">WLAN Encryption:</string>
++		<string name="wlan_empty">Scan failed or list empty, rescan please!</string>
+ 	</resources>
+ </language>
+diff --git a/gui/theme/extra-languages/languages/zh_CN.xml b/gui/theme/extra-languages/languages/zh_CN.xml
+index 11bceb49..df294620 100644
+--- a/gui/theme/extra-languages/languages/zh_CN.xml
++++ b/gui/theme/extra-languages/languages/zh_CN.xml
+@@ -1285,5 +1285,17 @@
+ 		<string name="enable_hw_control_2">和电源键操作界面。</string>
+ 		<string name="enable_hw_control_3">手势将被禁用。</string>
+ 		<string name="enable_hw_control_4">继续执行？</string>
++
++		<!-- WLAN -->
++		<string name="wlan_menu">WiFi</string>
++		<string name="wlan_scan">扫描网络</string>
++		<string name="wlan_scanning">扫描网络中...</string>
++		<string name="wlan_connect">连接网络</string>
++		<string name="wlan_status">获取网络信息</string>
++		<string name="wlan_test">测试联网状态</string>
++		<string name="wlan_list">WiFi列表</string>
++		<string name="wlan_select">选择需要连接的WiFi</string>
++		<string name="wlan_encryption">WiFi 加密方式:</string>
++		<string name="wlan_empty">扫描失败或者列表为空，请重新扫描！</string>
+ 	</resources>
+ </language>
+diff --git a/gui/theme/extra-languages/languages/zn_TW.xml b/gui/theme/extra-languages/languages/zn_TW.xml
+index b4360682..b4ace1a4 100644
+--- a/gui/theme/extra-languages/languages/zn_TW.xml
++++ b/gui/theme/extra-languages/languages/zn_TW.xml
+@@ -1285,5 +1285,8 @@
+ 		<string name="enable_hw_control_2">和電源鍵操作介面。</string>
+ 		<string name="enable_hw_control_3">手勢將被禁用。</string>
+ 		<string name="enable_hw_control_4">繼續執行？</string>
++
++		<!-- WLAN -->
++		<string name="wlan_menu">WiFi</string>
+ 	</resources>
+ </language>
+diff --git a/gui/theme/portrait_hdpi/pages/advanced.xml b/gui/theme/portrait_hdpi/pages/advanced.xml
+index 9a34f168..5f5cd75f 100644
+--- a/gui/theme/portrait_hdpi/pages/advanced.xml
++++ b/gui/theme/portrait_hdpi/pages/advanced.xml
+@@ -39,6 +39,10 @@
+ 					<icon res="help"/>
+ 					<action function="overlay">dialog_lost_info</action>
+ 				</listitem>
++				<listitem name="{@wlan_menu}">
++					<icon res="bs_adv_wlan"/>
++					<action function="page">wlan</action>
++				</listitem>
+ 				<listitem name="{@mount_hdr}">
+ 					<icon res="bs_adv_mount"/>
+ 					<action function="page">mount</action>
+diff --git a/gui/theme/portrait_hdpi/pages/templates/templates.xml b/gui/theme/portrait_hdpi/pages/templates/templates.xml
+index 13c56c7a..2f7960fe 100644
+--- a/gui/theme/portrait_hdpi/pages/templates/templates.xml
++++ b/gui/theme/portrait_hdpi/pages/templates/templates.xml
+@@ -1001,5 +1001,119 @@
+ 				<text>%ft_inf_sha5%</text>
+ 			</input>
+ 		</template>
++
++		<template name="wlan_password_page">
++			<template name="navbar_home"/>
++			<template name="navbar_console"/>
++			<template name="navbar_key"/>
++
++			<action>
++				<condition var1="wlanencryption" op="=" var2="OPEN"/>
++				<action function="page">wlan</action>
++				<action function="overlay">console</action>
++				<action function="terminalcommand">wlan_connect "%wlanselectedid%"</action>
++			</action>
++
++			<image>
++				<image resource="actionbar_encr_ena"/>
++				<placement x="%center_x%" y="%centered_title_1%" placement="4"/>
++			</image>
++
++			<text style="text_ab_subtitle">
++				<placement x="%center_x%" y="%centered_title_2%" placement="4"/>
++				<text>%wlanselectedid%</text>
++			</text>
++
++			<text style="text_body2_hl">
++				<placement x="%col1_x_indent%" y="%row2_1a_y%"/>
++				<text>{@wlan_encryption} %wlanencryption%</text>
++			</text>
++			
++			<text style="caption_hl">
++				<placement x="%col1_x_caption%" y="%row2_3a_y%"/>
++				<text>{@decrypt_data_enter_pass}</text>
++			</text>
++
++			<input>
++				<placement x="%col1_x_caption%" y="%row3_1a_y%" w="%input_backup_w%" h="%input_height%"/>
++				<text>%tw_crypto_display%</text>
++				<data name="wlan_password" mask="*" maskvariable="pass_enter_mask"/>
++				<restrict minlen="8" maxlen="254"/>
++				<action function="page">wlan</action>
++				<action function="overlay">console</action>
++				<action function="terminalcommand">wlan_connect "%wlanselectedid%" %wlan_password%</action>
++			</input>
++
++			<input>
++				<condition var1="of_show_pass" var2="1"/>
++				<placement x="%col1_x_caption%" y="%row3_1a_y%" w="%input_backup_w%" h="%input_height%"/>
++				<text>%tw_crypto_password%</text>
++				<data name="wlan_password"/>
++				<cursor color="%transparent%" hasfocus="0" width="0"/>
++				<restrict disable="1"/>
++				<action function="page">wlan_connect</action>
++			</input>
++
++			<button>
++				<placement x="%ab_btn1_x%" y="%row3_2_y%" placement="4"/>
++				<image resource="actionbar_show"/>
++				<action function="set">of_show_pass=1</action>
++			</button>
++
++			<fill color="%accent%">
++				<condition var1="tw_password_fail" op="!=" var2="1"/>
++				<placement x="%col1_x_caption%" y="%row3_2a_y%" w="%input_backup_w%" h="%input_line_height%" placement="1"/>
++			</fill>
++
++			<fill color="%text_fail%">
++				<condition var1="tw_password_fail" var2="1"/>
++				<placement x="%col1_x_caption%" y="%row3_2a_y%" w="%input_backup_w%" h="%input_line_height%" placement="1"/>
++			</fill>
++
++			<text style="text_input_fail">
++				<condition var1="tw_password_fail" var2="1"/>
++				<placement x="%col1_x_caption%" y="%row3_2a_y%"/>
++				<text>{@restore_dec_fail}</text>
++			</text>
++
++			<text style="caption_hl">
++				<condition var1="of_decrypt_from_menu" var2="2"/>
++				<placement x="%col1_x_caption%" y="%row4_1_y%"/>
++				<text>{@decrypt_data_user}</text>
++			</text>
++
++			<text style="text_body1">
++				<condition var1="of_decrypt_from_menu" var2="2"/>
++				<placement x="%col1_x_caption%" y="%row4_2_y%"/>
++				<text>%tw_crypto_user_display%</text>
++			</text>
++
++			<button style="menu_btn">
++				<condition var1="of_decrypt_from_menu" var2="2"/>
++				<placement x="%col1_x_caption%" y="%row4_1_y%" w="%input_w%" h="%mb_h_hide%"/>
++				<action function="page">wlan_list</action>
++			</button>
++
++			<template name="gestures"/>
++
++			<!-- Crutch; TWRP can't focus on right input so just prevent user from tapping anywhere except
++				 navbar and keyboard switcher -->
++			<button>
++				<condition var1="of_show_pass" var2="1"/>
++				<fill color="%transparent%"/>
++				<placement x="0" y="0" w="%screen_w%" h="%screen_h%"/>
++				<action function="set">of_show_pass=0</action>
++			</button>
++
++			<action>
++				<touch key="home"/>
++				<action function="page">wlan_list</action>
++			</action>
++
++			<action>
++				<touch key="back"/>
++				<action function="page">wlan_list</action>
++			</action>
++		</template>
+ 	</templates>
+ </recovery>
+diff --git a/gui/theme/portrait_hdpi/resources/images.xml b/gui/theme/portrait_hdpi/resources/images.xml
+index 49bb03a3..6b07de84 100644
+--- a/gui/theme/portrait_hdpi/resources/images.xml
++++ b/gui/theme/portrait_hdpi/resources/images.xml
+@@ -163,6 +163,7 @@
+ 		<image name="bs_adv_adb" filename="Default/Icons/adb" retainaspect="1"/>
+ 		<image name="bs_adv_frp" filename="Default/Icons/frp" retainaspect="1"/>
+ 		<image name="bs_adv_aroma" filename="Default/Icons/aroma" retainaspect="1"/>
++		<image name="bs_adv_wlan" filename="Default/Icons/wlan" retainaspect="1"/>
+ 		<image name="utils" filename="Default/Icons/utils" retainaspect="1"/>
+ 		<image name="hide" filename="Default/Icons/hide" retainaspect="1"/>
+ 		<image name="info" filename="Default/Icons/info" retainaspect="1"/>
+diff --git a/gui/theme/portrait_hdpi/ui.xml b/gui/theme/portrait_hdpi/ui.xml
+index 85525060..155a423e 100644
+--- a/gui/theme/portrait_hdpi/ui.xml
++++ b/gui/theme/portrait_hdpi/ui.xml
+@@ -40,6 +40,7 @@
+ 		<xml name="/twres/pages/anywhere.xml"/>
+ 		<xml name="/twres/pages/dialogs.xml"/>
+ 		<xml name="/twres/pages/customization.xml"/>
++		<xml name="/twres/pages/wlan.xml"/>
+ 
+ 		<xml name="/twres/pages/fox.xml"/>
+ 		<xml name="/sbin/maintainer.xml" default="/twres/pages/dummy.xml"/>
+diff --git a/openaes/src/isaac/rand.c b/openaes/src/isaac/rand.c
+index 63babc72..2815c796 100644
+--- a/openaes/src/isaac/rand.c
++++ b/openaes/src/isaac/rand.c
+@@ -25,20 +25,20 @@ MODIFIED:
+   *(r++) = b = ind(mm,y>>RANDSIZL) + x; \
+ }
+ 
+-void     isaac(ctx)
+-randctx *ctx;
++/* ANSI-C style definition (was K&R style before) */
++void isaac(randctx *ctx)
+ {
+    register ub4 a,b,x,y,*m,*mm,*m2,*r,*mend;
+-   mm=ctx->randmem; r=ctx->randrsl;
++   mm = ctx->randmem; r = ctx->randrsl;
+    a = ctx->randa; b = ctx->randb + (++ctx->randc);
+-   for (m = mm, mend = m2 = m+(RANDSIZ/2); m<mend; )
++   for (m = mm, mend = m2 = m + (RANDSIZ/2); m < mend; )
+    {
+       rngstep( a<<13, a, b, mm, m, m2, r, x);
+       rngstep( a>>6 , a, b, mm, m, m2, r, x);
+       rngstep( a<<2 , a, b, mm, m, m2, r, x);
+       rngstep( a>>16, a, b, mm, m, m2, r, x);
+    }
+-   for (m2 = mm; m2<mend; )
++   for (m2 = mm; m2 < mend; )
+    {
+       rngstep( a<<13, a, b, mm, m, m2, r, x);
+       rngstep( a>>6 , a, b, mm, m, m2, r, x);
+@@ -62,57 +62,56 @@ randctx *ctx;
+ }
+ 
+ /* if (flag==TRUE), then use the contents of randrsl[] to initialize mm[]. */
+-void randinit(ctx, flag)
+-randctx *ctx;
+-word     flag;
++/* ANSI-C style definition (was K&R style before). Note: flag uses `int` to match rand.h */
++void randinit(randctx *ctx, int flag)
+ {
+    word i;
+    ub4 a,b,c,d,e,f,g,h;
+    ub4 *m,*r;
+    ctx->randa = ctx->randb = ctx->randc = 0;
+-   m=ctx->randmem;
+-   r=ctx->randrsl;
+-   a=b=c=d=e=f=g=h=0x9e3779b9;  /* the golden ratio */
++   m = ctx->randmem;
++   r = ctx->randrsl;
++   a = b = c = d = e = f = g = h = 0x9e3779b9;  /* the golden ratio */
+ 
+-   for (i=0; i<4; ++i)          /* scramble it */
++   for (i = 0; i < 4; ++i)          /* scramble it */
+    {
+      mix(a,b,c,d,e,f,g,h);
+    }
+ 
+-   if (flag) 
++   if (flag)
+    {
+      /* initialize using the contents of r[] as the seed */
+-     for (i=0; i<RANDSIZ; i+=8)
++     for (i = 0; i < RANDSIZ; i += 8)
+      {
+-       a+=r[i  ]; b+=r[i+1]; c+=r[i+2]; d+=r[i+3];
+-       e+=r[i+4]; f+=r[i+5]; g+=r[i+6]; h+=r[i+7];
++       a += r[i  ]; b += r[i+1]; c += r[i+2]; d += r[i+3];
++       e += r[i+4]; f += r[i+5]; g += r[i+6]; h += r[i+7];
+        mix(a,b,c,d,e,f,g,h);
+-       m[i  ]=a; m[i+1]=b; m[i+2]=c; m[i+3]=d;
+-       m[i+4]=e; m[i+5]=f; m[i+6]=g; m[i+7]=h;
++       m[i  ] = a; m[i+1] = b; m[i+2] = c; m[i+3] = d;
++       m[i+4] = e; m[i+5] = f; m[i+6] = g; m[i+7] = h;
+      }
+      /* do a second pass to make all of the seed affect all of m */
+-     for (i=0; i<RANDSIZ; i+=8)
++     for (i = 0; i < RANDSIZ; i += 8)
+      {
+-       a+=m[i  ]; b+=m[i+1]; c+=m[i+2]; d+=m[i+3];
+-       e+=m[i+4]; f+=m[i+5]; g+=m[i+6]; h+=m[i+7];
++       a += m[i  ]; b += m[i+1]; c += m[i+2]; d += m[i+3];
++       e += m[i+4]; f += m[i+5]; g += m[i+6]; h += m[i+7];
+        mix(a,b,c,d,e,f,g,h);
+-       m[i  ]=a; m[i+1]=b; m[i+2]=c; m[i+3]=d;
+-       m[i+4]=e; m[i+5]=f; m[i+6]=g; m[i+7]=h;
++       m[i  ] = a; m[i+1] = b; m[i+2] = c; m[i+3] = d;
++       m[i+4] = e; m[i+5] = f; m[i+6] = g; m[i+7] = h;
+      }
+    }
+    else
+    {
+      /* fill in m[] with messy stuff */
+-     for (i=0; i<RANDSIZ; i+=8)
++     for (i = 0; i < RANDSIZ; i += 8)
+      {
+        mix(a,b,c,d,e,f,g,h);
+-       m[i  ]=a; m[i+1]=b; m[i+2]=c; m[i+3]=d;
+-       m[i+4]=e; m[i+5]=f; m[i+6]=g; m[i+7]=h;
++       m[i  ] = a; m[i+1] = b; m[i+2] = c; m[i+3] = d;
++       m[i+4] = e; m[i+5] = f; m[i+6] = g; m[i+7] = h;
+      }
+    }
+ 
+    isaac(ctx);            /* fill in the first set of results */
+-   ctx->randcnt=RANDSIZ;  /* prepare to use the first set of results */
++   ctx->randcnt = RANDSIZ;  /* prepare to use the first set of results */
+ }
+ 
+ 
+@@ -121,16 +120,16 @@ int main()
+ {
+   ub4 i,j;
+   randctx ctx;
+-  ctx.randa=ctx.randb=ctx.randc=(ub4)0;
+-  for (i=0; i<256; ++i) ctx.randrsl[i]=(ub4)0;
++  ctx.randa = ctx.randb = ctx.randc = (ub4)0;
++  for (i = 0; i < 256; ++i) ctx.randrsl[i] = (ub4)0;
+   randinit(&ctx, TRUE);
+-  for (i=0; i<2; ++i)
++  for (i = 0; i < 2; ++i)
+   {
+     isaac(&ctx);
+-    for (j=0; j<256; ++j)
++    for (j = 0; j < 256; ++j)
+     {
+       printf("%.8lx",ctx.randrsl[j]);
+-      if ((j&7)==7) printf("\n");
++      if ((j&7) == 7) printf("\n");
+     }
+   }
+ }
+diff --git a/openaes/src/isaac/rand.h b/openaes/src/isaac/rand.h
+index 73f6e3e4..061f737c 100644
+--- a/openaes/src/isaac/rand.h
++++ b/openaes/src/isaac/rand.h
+@@ -16,30 +16,29 @@ MODIFIED:
+ 
+ #ifndef RAND
+ #define RAND
++
+ #define RANDSIZL   (8)
+ #define RANDSIZ    (1<<RANDSIZL)
+ 
+ /* context of random number generator */
+-struct randctx
++typedef struct randctx
+ {
+-  ub4 randcnt;
+-  ub4 randrsl[RANDSIZ];
+-  ub4 randmem[RANDSIZ];
+-  ub4 randa;
+-  ub4 randb;
+-  ub4 randc;
+-};
+-typedef  struct randctx  randctx;
++    ub4 randcnt;
++    ub4 randrsl[RANDSIZ];
++    ub4 randmem[RANDSIZ];
++    ub4 randa;
++    ub4 randb;
++    ub4 randc;
++} randctx;
+ 
+ /*
+ ------------------------------------------------------------------------------
+  If (flag==TRUE), then use the contents of randrsl[0..RANDSIZ-1] as the seed.
+ ------------------------------------------------------------------------------
+ */
+-void randinit(/*_ randctx *r, word flag _*/);
+-
+-void isaac(/*_ randctx *r _*/);
+-
++/* proper C prototypes (required for C23) */
++void randinit(randctx *r, int flag);
++void isaac(randctx *r);
+ 
+ /*
+ ------------------------------------------------------------------------------
+@@ -47,9 +46,9 @@ void isaac(/*_ randctx *r _*/);
+ ------------------------------------------------------------------------------
+ */
+ #define rand(r) \
+-   (!(r)->randcnt-- ? \
+-     (isaac(r), (r)->randcnt=RANDSIZ-1, (r)->randrsl[(r)->randcnt]) : \
+-     (r)->randrsl[(r)->randcnt])
++    (!(r)->randcnt-- ? \
++        (isaac(r), (r)->randcnt = RANDSIZ - 1, (r)->randrsl[(r)->randcnt]) : \
++        (r)->randrsl[(r)->randcnt])
+ 
+ #endif  /* RAND */
+ 
+diff --git a/prebuilt/Android.bp b/prebuilt/Android.bp
+index 985c5c75..2f144fa6 100644
+--- a/prebuilt/Android.bp
++++ b/prebuilt/Android.bp
+@@ -2,5 +2,6 @@ soong_namespace {
+     imports: [
+ 		"external/lptools",
+ 		"external/se_omapi",
++		"external/libmicrohttpd",
+ 	],
+ }
+diff --git a/prebuilt/Android.mk b/prebuilt/Android.mk
+old mode 100755
+new mode 100644
+index a0240333..545a3a5e
+--- a/prebuilt/Android.mk
++++ b/prebuilt/Android.mk
+@@ -279,6 +279,9 @@ ifeq ($(TW_INCLUDE_CRYPTO), true)
+          #RECOVERY_LIBRARY_SOURCE_FILES += $(TARGET_OUT_SHARED_LIBRARIES)/libhidl-gen-hash.so
+     endif
+ endif
++ifneq ($(TW_NO_NETWORK), true)
++    RECOVERY_BINARY_SOURCE_FILES += $(TARGET_OUT_EXECUTABLES)/microhttpd
++endif
+ ifeq ($(AB_OTA_UPDATER), true)
+     RECOVERY_BINARY_SOURCE_FILES += $(TARGET_RECOVERY_ROOT_OUT)/system/bin/update_engine_sideload
+     RECOVERY_BINARY_SOURCE_FILES += $(TARGET_OUT_VENDOR_EXECUTABLES)/hw/android.hardware.boot@1.0-service

@@ -1,3 +1,5 @@
+这是一个fork版本，添加了对编译橙狐14.1分支的支持
+Patches文件夹内是wifi补丁
 # OrangeFox Action Builder
 Compile your first custom recovery from OrangeFox Recovery using Github Action.
 
@@ -5,7 +7,7 @@ Compile your first custom recovery from OrangeFox Recovery using Github Action.
 1. Fork this repository.
 
 2. Go to `Action` tab > `All workflows` > `OrangeFox - Build` > `Run workflow`, then fill all the required information:
- * MANIFEST_BRANCH (`12.1` and `11.0`)
+ * MANIFEST_BRANCH (`12.1` and `14.1`)
  * DEVICE_TREE (Your device tree repository link.)
  * DEVICE_TREE_BRANCH (Your device tree repository branch.)
  * DEVICE_PATH (`device/vendor/codename`)
