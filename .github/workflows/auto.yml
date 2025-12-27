@@ -175,9 +175,11 @@ jobs:
         run: |
           WORKINGDIR=$(pwd)
           cd $WORKINGDIR/bootable/recovery
+          git apply $WORKINGDIR/${{ inputs.DEVICE_PATH }}/patches/*.patch || echo "⚠️ 14.1分支补丁应用失败，继续构建"
           git fetch https://github.com/ymdzq/OrangeFox_Recovery fox_14.1 
           git cherry-pick 4aaf6017d3ec11bb3ec3e42e3af3ce96202584cf  # 先应用第一个
           git cherry-pick 99e35fe5182cc612944058404d7247e208ebd62e  # 再应用第二个          
+          git cherry-pick 1ccd5e37ce1a8ddd4982ff79d8f95d4cc05c6c6f # ymdzq 14.1 patch
           cd $WORKINGDIR
           git clone https://github.com/adontoo/android_external_libmicrohttpd -b ofox-14.1 external/libmicrohttpd
           rm -rf bionic
